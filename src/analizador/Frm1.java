@@ -16,6 +16,8 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.nio.file.Files;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java_cup.runtime.Symbol;
@@ -45,82 +47,86 @@ public class Frm1 extends javax.swing.JFrame {
         txtLexicalResult.setEditable(false);
         txtSyntacticResult.setEditable(false);
         txtSemanticResult.setEditable(false);
+        txtTranslatorResult.setEditable(false);
     }
     
-    private void translatePythonToC() {
-        String pythonCode = txtInput.getText(); // Obtiene el código de entrada en txtInput
-        StringBuilder cCode = new StringBuilder(); // Para almacenar el resultado en C
+    public String translatePythonToC(String pythonCode) {
+        StringBuilder cCode = new StringBuilder();
+        Set<String> declaredVariables = new HashSet<>();
+        boolean usesBoolean = false;
 
-        // Agrega encabezados y la función main
-        cCode.append("#include <stdio.h>\n\n");
-        cCode.append("int main() {\n");
-
-        // Divide el código en líneas para análisis
+        // Dividimos el código Python por líneas
         String[] lines = pythonCode.split("\n");
 
+        // Comenzamos el código C
+        cCode.append("#include <stdio.h>\n");
+
+        // Solo agregar <stdbool.h> si se usa booleano
         for (String line : lines) {
-            line = line.trim(); // Elimina espacios al inicio y fin de la línea
-
-            // Asignaciones de variables (por ejemplo, "x = 5")
-            if (line.matches("^[a-zA-Z_][a-zA-Z0-9_]* = .+")) {
-                String[] parts = line.split(" = ");
-                String varName = parts[0];
-                String value = parts[1];
-
-                // Detecta el tipo de dato para C
-                if (value.matches("^[0-9]+$")) { // Entero
-                    cCode.append("    int ").append(varName).append(" = ").append(value).append(";\n");
-                } else if (value.matches("^[0-9]*\\.[0-9]+$")) { // Decimal
-                    cCode.append("    float ").append(varName).append(" = ").append(value).append(";\n");
-                } else { // Asume que es una cadena de texto
-                    cCode.append("    char ").append(varName).append("[] = ").append(value).append(";\n");
-                }
-            }
-
-            // Traducción de print (por ejemplo, "print('Hola')")
-            else if (line.startsWith("print(")) {
-                String content = line.substring(6, line.length() - 1);
-                if (content.matches("\".*\"")) { // Cadena de texto
-                    cCode.append("    printf(").append(content).append(");\n");
-                } else { // Variable o expresión
-                    cCode.append("    printf(\"%d\", ").append(content).append(");\n");
-                }
-            }
-
-            // Traducción de if-else (por ejemplo, "if x > 5:")
-            else if (line.startsWith("if ")) {
-                String condition = line.substring(3, line.length() - 1);
-                cCode.append("    if (").append(condition).append(") {\n");
-            } else if (line.startsWith("elif ")) {
-                String condition = line.substring(5, line.length() - 1);
-                cCode.append("    } else if (").append(condition).append(") {\n");
-            } else if (line.startsWith("else:")) {
-                cCode.append("    } else {\n");
-            }
-
-            // Traducción de for (por ejemplo, "for i in range(5):")
-            else if (line.startsWith("for ")) {
-                if (line.contains(" in range(") && line.endsWith("):")) {
-                    String varName = line.split(" ")[1];
-                    String rangeVal = line.substring(line.indexOf("(") + 1, line.indexOf(")"));
-                    cCode.append("    for (int ").append(varName).append(" = 0; ")
-                         .append(varName).append(" < ").append(rangeVal).append("; ")
-                         .append(varName).append("++) {\n");
-                }
-            }
-
-            // Manejo de la indentación en Python (para terminar bloques)
-            else if (line.isEmpty()) {
-                cCode.append("    }\n");
+            line = line.trim();
+            if (line.contains("True") || line.contains("False")) {
+                usesBoolean = true;
+                break;
             }
         }
 
-        // Cierra la función main
+        if (usesBoolean) {
+            cCode.append("#include <stdbool.h>\n");
+        }
+
+        cCode.append("\nint main() {\n");
+
+        for (String line : lines) {
+            line = line.trim();
+
+            if (line.startsWith("if ")) {
+                String condition = line.substring(3, line.indexOf(":"));
+                cCode.append("    if (").append(condition).append(") {\n");
+            } else if (line.startsWith("elif ")) {
+                String condition = line.substring(5, line.indexOf(":"));
+                cCode.append("    } else if (").append(condition).append(") {\n");
+            } else if (line.startsWith("else")) {
+                cCode.append("    } else {\n");
+            } else if (line.startsWith("print(")) {
+                String content = line.substring(line.indexOf("(") + 1, line.lastIndexOf(")"));
+                cCode.append("        printf(").append(content).append(");\n");
+            } else if (line.contains("=")) {
+                // Detectamos la asignación de variables y añadimos el tipo correspondiente
+                String[] parts = line.split("=");
+                String varName = parts[0].trim();
+                String value = parts[1].trim();
+
+                // Determinamos el tipo de la variable basándonos en el valor
+                String varType = "int"; // Por defecto, asignamos "int"
+                if (value.equals("True") || value.equals("False")) {
+                    // Booleano
+                    varType = "bool";
+                    value = value.equals("True") ? "true" : "false";
+                } else if (value.contains(".")) {
+                    // Si el valor contiene un punto decimal, puede ser float o double
+                    varType = value.length() > 15 ? "double" : "float";
+                } else if (value.startsWith("\"") && value.endsWith("\"")) {
+                    // Si el valor es una cadena (string)
+                    varType = "char[]";
+                }
+
+                // Si la variable no ha sido declarada, la declaramos
+                if (!declaredVariables.contains(varName)) {
+                    cCode.append("    ").append(varType).append(" ").append(varName).append(" = ").append(value).append(";\n");
+                    declaredVariables.add(varName); // Marcamos la variable como declarada
+                }
+            } else if (line.isEmpty()) {
+                cCode.append("\n");
+            } else {
+                cCode.append("    ").append(line).append(";\n");
+            }
+        }
+
+        // Cerrar los bloques abiertos
         cCode.append("    return 0;\n");
         cCode.append("}\n");
 
-        // Muestra el resultado en txtTranslatorResult
-        txtTranslatorResult.setText(cCode.toString());
+        return cCode.toString();
     }
     
     private void lexicalAnalyze() throws IOException{
@@ -808,7 +814,9 @@ public class Frm1 extends javax.swing.JFrame {
     }//GEN-LAST:event_btnSemanticAnalyzeActionPerformed
 
     private void btnTranslateActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnTranslateActionPerformed
-        translatePythonToC();
+        String pythonCode = txtInput.getText();
+        String cCode = translatePythonToC(pythonCode);
+        txtTranslatorResult.setText(cCode);
     }//GEN-LAST:event_btnTranslateActionPerformed
 
     /**
