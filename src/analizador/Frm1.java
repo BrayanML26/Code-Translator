@@ -17,6 +17,7 @@ import java.io.StringReader;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -49,84 +50,194 @@ public class Frm1 extends javax.swing.JFrame {
         txtSemanticResult.setEditable(false);
         txtTranslatorResult.setEditable(false);
     }
-    
+
     public String translatePythonToC(String pythonCode) {
         StringBuilder cCode = new StringBuilder();
         Set<String> declaredVariables = new HashSet<>();
+        Map<String, String> variableTypes = new HashMap<>();
+        int indentationLevel = 0;
         boolean usesBoolean = false;
+        boolean usesString = false;
 
-        // Dividimos el código Python por líneas
-        String[] lines = pythonCode.split("\n");
-
-        // Comenzamos el código C
+        // Headers básicos
         cCode.append("#include <stdio.h>\n");
+        cCode.append("#include <stdlib.h>\n");
 
-        // Solo agregar <stdbool.h> si se usa booleano
+        // Procesamos el código para detectar tipos especiales
+        String[] lines = pythonCode.split("\n");
         for (String line : lines) {
-            line = line.trim();
             if (line.contains("True") || line.contains("False")) {
                 usesBoolean = true;
-                break;
+            }
+            if (line.contains("\"")) {
+                usesString = true;
             }
         }
 
         if (usesBoolean) {
             cCode.append("#include <stdbool.h>\n");
         }
+        if (usesString) {
+            cCode.append("#include <string.h>\n");
+        }
 
         cCode.append("\nint main() {\n");
 
         for (String line : lines) {
             line = line.trim();
+            if (line.isEmpty()) continue;
 
+            // Manejo de comentarios
+            if (line.startsWith("#")) {
+                cCode.append(getIndentation(indentationLevel)).append("//").append(line.substring(1)).append("\n");
+                continue;
+            }
+
+            // Manejo de estructuras de control
             if (line.startsWith("if ")) {
-                String condition = line.substring(3, line.indexOf(":"));
-                cCode.append("    if (").append(condition).append(") {\n");
+                String condition = translateCondition(line.substring(3, line.indexOf(":")));
+                cCode.append(getIndentation(indentationLevel)).append("if (").append(condition).append(") {\n");
+                indentationLevel++;
             } else if (line.startsWith("elif ")) {
-                String condition = line.substring(5, line.indexOf(":"));
-                cCode.append("    } else if (").append(condition).append(") {\n");
-            } else if (line.startsWith("else")) {
-                cCode.append("    } else {\n");
+                indentationLevel--;
+                String condition = translateCondition(line.substring(5, line.indexOf(":")));
+                cCode.append(getIndentation(indentationLevel)).append("} else if (").append(condition).append(") {\n");
+                indentationLevel++;
+            } else if (line.startsWith("else:")) {
+                indentationLevel--;
+                cCode.append(getIndentation(indentationLevel)).append("} else {\n");
+                indentationLevel++;
+            } else if (line.startsWith("for ")) {
+                translateForLoop(line, cCode, indentationLevel);
+                indentationLevel++;
+            } else if (line.startsWith("while ")) {
+                String condition = translateCondition(line.substring(6, line.indexOf(":")));
+                cCode.append(getIndentation(indentationLevel)).append("while (").append(condition).append(") {\n");
+                indentationLevel++;
             } else if (line.startsWith("print(")) {
-                String content = line.substring(line.indexOf("(") + 1, line.lastIndexOf(")"));
-                cCode.append("        printf(").append(content).append(");\n");
+                translatePrint(line, cCode, indentationLevel, variableTypes);
             } else if (line.contains("=")) {
-                // Detectamos la asignación de variables y añadimos el tipo correspondiente
-                String[] parts = line.split("=");
-                String varName = parts[0].trim();
-                String value = parts[1].trim();
-
-                // Determinamos el tipo de la variable basándonos en el valor
-                String varType = "int"; // Por defecto, asignamos "int"
-                if (value.equals("True") || value.equals("False")) {
-                    // Booleano
-                    varType = "bool";
-                    value = value.equals("True") ? "true" : "false";
-                } else if (value.contains(".")) {
-                    // Si el valor contiene un punto decimal, puede ser float o double
-                    varType = value.length() > 15 ? "double" : "float";
-                } else if (value.startsWith("\"") && value.endsWith("\"")) {
-                    // Si el valor es una cadena (string)
-                    varType = "char[]";
-                }
-
-                // Si la variable no ha sido declarada, la declaramos
-                if (!declaredVariables.contains(varName)) {
-                    cCode.append("    ").append(varType).append(" ").append(varName).append(" = ").append(value).append(";\n");
-                    declaredVariables.add(varName); // Marcamos la variable como declarada
-                }
-            } else if (line.isEmpty()) {
-                cCode.append("\n");
-            } else {
-                cCode.append("    ").append(line).append(";\n");
+                translateAssignment(line, cCode, indentationLevel, declaredVariables, variableTypes);
+            } else if (line.equals("break")) {
+                cCode.append(getIndentation(indentationLevel)).append("break;\n");
+            } else if (line.equals("continue")) {
+                cCode.append(getIndentation(indentationLevel)).append("continue;\n");
             }
         }
 
-        // Cerrar los bloques abiertos
-        cCode.append("    return 0;\n");
-        cCode.append("}\n");
+        // Cerrar el main
+        cCode.append("\n    return 0;\n}\n");
 
         return cCode.toString();
+    }
+
+    private String getIndentation(int level) {
+        return "    ".repeat(level);
+    }
+
+    private String translateCondition(String condition) {
+        condition = condition.trim();
+        condition = condition.replace("and", "&&")
+                           .replace("or", "||")
+                           .replace("not", "!")
+                           .replace("True", "true")
+                           .replace("False", "false")
+                           .replace("None", "NULL");
+        return condition;
+    }
+
+    private void translateForLoop(String line, StringBuilder cCode, int indentLevel) {
+        String[] parts = line.substring(4, line.indexOf(":")).trim().split(" in ");
+        String iterator = parts[0].trim();
+        String range = parts[1].trim();
+
+        if (range.startsWith("range(")) {
+            String[] rangeParams = range.substring(6, range.length() - 1).split(",");
+            String start = rangeParams[0].trim();
+            String end = rangeParams.length > 1 ? rangeParams[1].trim() : start;
+            String step = rangeParams.length > 2 ? rangeParams[2].trim() : "1";
+
+            if (rangeParams.length == 1) {
+                start = "0";
+            }
+
+            cCode.append(getIndentation(indentLevel))
+                 .append("for (int ").append(iterator).append(" = ").append(start)
+                 .append("; ").append(iterator).append(" < ").append(end)
+                 .append("; ").append(iterator).append(" += ").append(step).append(") {\n");
+        }
+    }
+
+    private void translatePrint(String line, StringBuilder cCode, int indentLevel, Map<String, String> varTypes) {
+        String content = line.substring(6, line.length() - 1);
+        
+        if (content.startsWith("\"")) {
+            // String literal
+            cCode.append(getIndentation(indentLevel)).append("printf(").append(content).append(");\n");
+        } else {
+            // Variable
+            String format = getFormatSpecifier(varTypes.getOrDefault(content, "int"));
+            cCode.append(getIndentation(indentLevel))
+                 .append("printf(\"").append(format).append("\\n\", ").append(content).append(");\n");
+        }
+    }
+
+    private String getFormatSpecifier(String type) {
+        switch (type) {
+            case "int": return "%d";
+            case "float": return "%f";
+            case "double": return "%lf";
+            case "char": return "%c";
+            case "char*": return "%s";
+            case "bool": return "%d";
+            default: return "%d";
+        }
+    }
+
+    private void translateAssignment(String line, StringBuilder cCode, int indentLevel, 
+                                   Set<String> declared, Map<String, String> varTypes) {
+        String[] parts = line.split("=");
+        String varName = parts[0].trim();
+        String value = parts[1].trim();
+
+        String varType = determineType(value);
+        varTypes.put(varName, varType);
+
+        if (!declared.contains(varName)) {
+            cCode.append(getIndentation(indentLevel))
+                 .append(varType).append(" ")
+                 .append(varName).append(" = ")
+                 .append(translateValue(value, varType)).append(";\n");
+            declared.add(varName);
+        } else {
+            cCode.append(getIndentation(indentLevel))
+                 .append(varName).append(" = ")
+                 .append(translateValue(value, varType)).append(";\n");
+        }
+    }
+
+    private String determineType(String value) {
+        if (value.equals("True") || value.equals("False")) {
+            return "bool";
+        } else if (value.startsWith("\"") && value.endsWith("\"")) {
+            return "char*";
+        } else if (value.contains(".")) {
+            return "double";
+        } else {
+            try {
+                Integer.parseInt(value);
+                return "int";
+            } catch (NumberFormatException e) {
+                return "char*";
+            }
+        }
+    }
+
+    private String translateValue(String value, String type) {
+        if (type.equals("bool")) {
+            return value.equals("True") ? "true" : "false";
+        }
+        return value;
     }
     
     private void lexicalAnalyze() throws IOException{

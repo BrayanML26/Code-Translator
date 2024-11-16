@@ -1,14 +1,40 @@
+# Variables de distintos tipos
 x = 5
-y = 3.5
+y = 3.1415
+flag = True
 name = "Alice"
+grade = 'A'
 
-print("Hello, " + name)
-print(x)
-
+# Condicionales
 if x > 3:
     print("x is greater than 3")
+elif x == 3:
+    print("x is equal to 3")
 else:
-    print("x is not greater than 3")
+    print("x is less than 3")
 
-for i in range(5):
+# Bucle for
+for i in range(0, 5):
     print(i)
+
+# Bucle while
+while x > 0:
+    print(x)
+    x -= 1
+
+# Bucle do-while
+do_continue = True
+while do_continue:
+    print("This is a simulated do-while loop")
+    do_continue = False
+
+# Switch-case usando if-elif 
+grade = 'B'
+if grade == 'A':
+    print("Excellent")
+elif grade == 'B':
+    print("Good")
+elif grade == 'C':
+    print("Average")
+else:
+    print("Needs Improvement")
